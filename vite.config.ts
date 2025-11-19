@@ -4,7 +4,7 @@ import path from 'path'
 import { componentTagger } from 'lovable-tagger'
 
 export default defineConfig(({ mode }) => ({
-  base: '/',
+  base: '/smartcollege/",',
   plugins: [react(), mode === 'development' && componentTagger()].filter(Boolean),
   server: {
     host: '::',
