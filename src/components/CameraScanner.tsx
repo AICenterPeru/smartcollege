@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Html5Qrcode } from "html5-qrcode";
+import { BrowserMultiFormatReader, IScannerControls } from "@zxing/browser";
 import { ArrowLeft, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -15,99 +15,124 @@ interface CameraScannerProps {
 
 const CameraScanner = ({ onBack, onScanSuccess }: CameraScannerProps) => {
   const [scanType, setScanType] = useState<"ingreso" | "salida">("ingreso");
-  const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string>("");
-  const scannerRef = useRef<Html5Qrcode | null>(null);
-  const resumeTimeoutRef = useRef<number | null>(null);
-  const isScannerRunningRef = useRef(false);
-  const scanTypeRef = useRef<"ingreso" | "salida">("ingreso");
-  const lastScannedRef = useRef<{ code: string; timestamp: number } | null>(
-    null
-  );
-  const elementId = "qr-reader";
+  const [isScanning, setIsScanning] = useState(false);
 
-  // Update scanTypeRef when scanType changes
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const scannerControls = useRef<IScannerControls | null>(null);
+  const resumeTimeoutRef = useRef<number | null>(null);
+  const lastScannedRef = useRef<{ code: string; ts: number } | null>(null);
+
+  const scanTypeRef = useRef<"ingreso" | "salida">(scanType);
+
   scanTypeRef.current = scanType;
 
+  // 🔵 DIBUJAR EL CUADRO VERDE
+  const drawBoundingBox = (points: any[]) => {
+    const canvas = canvasRef.current;
+    const video = videoRef.current;
+    if (!canvas || !video || points.length < 2) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    // Asegurar tamaño del canvas == tamaño del video
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = "lime";
+    ctx.lineWidth = 4;
+
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) {
+      ctx.lineTo(points[i].x, points[i].y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+
+    // Borrar el cuadro después de 300ms
+    setTimeout(() => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }, 300);
+  };
+
   useEffect(() => {
-    const startScanner = async () => {
-      try {
-        const scanner = new Html5Qrcode(elementId);
-        scannerRef.current = scanner;
+    const reader = new BrowserMultiFormatReader();
 
-        await scanner.start(
-          { facingMode: "environment" },
-          {
-            fps: 10,
-            qrbox: { width: 250, height: 250 },
-          },
-          (decodedText) => {
-            const now = Date.now();
-            const lastScanned = lastScannedRef.current;
+    const callback = async (result: any, err: any, ctrl: IScannerControls) => {
+      if (result) {
+        const code = result.getText();
+        const now = Date.now();
+        const last = lastScannedRef.current;
 
-            // Prevenir escaneos duplicados del mismo código en 5 segundos
-            if (
-              lastScanned &&
-              lastScanned.code === decodedText &&
-              now - lastScanned.timestamp < 5000
-            ) {
-              return;
-            }
+        // Evitar duplicados por 5s
+        if (last && last.code === code && now - last.ts < 5000) return;
 
-            const currentType = scanTypeRef.current;
-            lastScannedRef.current = { code: decodedText, timestamp: now };
+        lastScannedRef.current = { code, ts: now };
 
-            // Intentar registrar el escaneo
-            onScanSuccess(decodedText, currentType);
+        // Dibujar recuadro verde
+        const points = result.getResultPoints();
+        if (points) drawBoundingBox(points);
 
-            scanner.pause(true);
-            isScannerRunningRef.current = false;
-            resumeTimeoutRef.current = window.setTimeout(() => {
-              if (scannerRef.current) {
-                scanner.resume();
-                isScannerRunningRef.current = true;
-              }
-            }, 3000);
-          },
-          (errorMessage) => {
-            // Ignore errors during scanning
-            console.warn("QR Scan Error:", errorMessage);
-          }
-        );
+        const type = scanTypeRef.current;
+        await onScanSuccess(code, type);
 
-        isScannerRunningRef.current = true;
-        setIsScanning(true);
-        setError("");
-      } catch (err) {
-        setError(
-          "No se pudo acceder a la cámara. Por favor, verifica los permisos."
-        );
-        console.error("Error starting scanner:", err);
+        // Pausar el escaneo
+        ctrl.stop();
+        scannerControls.current = ctrl;
+
+        // Reanudar en 3s
+        resumeTimeoutRef.current = window.setTimeout(async () => {
+          await reader.decodeFromVideoDevice(
+            undefined,
+            videoRef.current!,
+            callback
+          );
+        }, 3000);
+
+        return;
+      }
+
+      if (err) {
+        if (
+          err.name?.startsWith("NotFoundException") ||
+          err.name?.startsWith("ChecksumException") ||
+          err.name?.startsWith("FormatException")
+        ) {
+          return;
+        }
+        setError("Ocurrió un problema con el escáner: " + err.message);
       }
     };
 
-    startScanner();
+    const start = async () => {
+      try {
+        setError("");
+
+        const controls = await reader.decodeFromVideoDevice(
+          undefined,
+          videoRef.current!,
+          callback
+        );
+
+        scannerControls.current = controls;
+        setIsScanning(true);
+      } catch (e) {
+        console.error(e);
+        setError("No se pudo acceder a la cámara. Verifica permisos.");
+      }
+    };
+
+    start();
 
     return () => {
-      if (resumeTimeoutRef.current) {
-        clearTimeout(resumeTimeoutRef.current);
-      }
-
-      if (scannerRef.current && isScannerRunningRef.current) {
-        scannerRef.current
-          .stop()
-          .then(() => {
-            scannerRef.current = null;
-            isScannerRunningRef.current = false;
-          })
-          .catch((err) => {
-            console.error("Error stopping scanner:", err);
-            scannerRef.current = null;
-            isScannerRunningRef.current = false;
-          });
-      }
+      if (resumeTimeoutRef.current) clearTimeout(resumeTimeoutRef.current);
+      scannerControls.current?.stop();
     };
-  }, [onScanSuccess]);
+  }, []);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5 p-4">
@@ -130,12 +155,30 @@ const CameraScanner = ({ onBack, onScanSuccess }: CameraScannerProps) => {
               <p className="text-sm">{error}</p>
             </div>
           ) : (
-            <div className="space-y-4">
-              <div
-                id={elementId}
-                className="mx-auto rounded-lg overflow-hidden shadow-elevated"
-                style={{ maxWidth: "100%" }}
-              />
+            <div className="space-y-4 relative">
+              {/* Contenedor con video + canvas encima */}
+              <div style={{ position: "relative", width: "100%" }}>
+                <video
+                  ref={videoRef}
+                  className="mx-auto rounded-lg shadow-elevated"
+                  style={{ width: "100%", maxWidth: "400px" }}
+                  autoPlay
+                  muted
+                  playsInline
+                />
+
+                <canvas
+                  ref={canvasRef}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    height: "100%",
+                    pointerEvents: "none",
+                  }}
+                />
+              </div>
 
               {isScanning && (
                 <p className="text-center text-sm text-muted-foreground animate-pulse">
