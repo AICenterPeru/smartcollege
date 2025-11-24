@@ -47,20 +47,21 @@ export const useMarcacion = () => {
       try {
         setLoading(true);
         const response = await marcacionApi.registrar(payload);
+
+        if (response.error) {
+          toast({
+            title: "Error al registrar marcación",
+            description: response.mensaje,
+            variant: "destructive",
+          });
+          return null;
+        }
+
         toast({
           title: "Marcación registrada",
           description: response.mensaje,
         });
         return response.alumno;
-      } catch (error: any) {
-        const msg = error.response?.data?.error || "Ocurrió un error al registrar la marcación.";
-        const esMarcacionRepetida = msg.toLowerCase().includes("ya registró");
-        toast({
-          title: esMarcacionRepetida ? "Marcación existente" : "Error al registrar marcación",
-          description: msg,
-          variant: "destructive",
-        });
-        return null;
       } finally {
         setLoading(false);
       }

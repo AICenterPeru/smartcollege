@@ -22,7 +22,8 @@ export interface AlumnoInfo {
 
 export interface RegistrarMarcacionResponse {
   mensaje: string;
-  alumno: AlumnoInfo;
+  alumno: AlumnoInfo | null; 
+  error?: boolean;    
 }
 
 export interface Marcacion {
@@ -44,8 +45,25 @@ export const marcacionApi = {
   registrar: async (
     data: RegistrarMarcacionRequest
   ): Promise<RegistrarMarcacionResponse> => {
-    const response = await axiosClient.post("/Marcacion/RegistrarMarcacion", data);
-    return response.data;
+    try {
+      const response = await axiosClient.post("/Marcacion/RegistrarMarcacion", data);
+      return {
+        mensaje: response.data.mensaje,
+        alumno: response.data.alumno,
+        error: false  
+      };
+    } catch (error: any) {
+      const message =
+      error?.response?.data?.error ||
+      error?.response?.data?.message ||
+      "Error al registrar marcación";
+
+      return {
+        mensaje: message,
+        alumno: null,
+        error: true,
+      };
+    }
   },
 
   obtenerMarcacionesDelDia: async (
